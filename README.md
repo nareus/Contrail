@@ -4,7 +4,7 @@ A high-throughput geospatial search service that returns live aircraft positions
 
 ```
 GET /api/v1/aircraft?lat=1.35&lng=103.82&radius=150
-→ 94 live aircraft over Singapore, sorted by distance, p95 latency: 7ms
+  94 live aircraft over Singapore, sorted by distance, p95 latency: 7ms
 ```
 
 ---
@@ -15,7 +15,7 @@ GET /api/v1/aircraft?lat=1.35&lng=103.82&radius=150
 Client Request
       │
       ▼
- Rate Limiter          Redis INCR — 100 req/min per IP, atomic + distributed
+ Rate Limiter          Redis INCR: 100 req/min per IP, atomic + distributed
       │
       ▼
  Controller            Validates params, returns ResponseEntity with headers
@@ -25,7 +25,7 @@ Client Request
       │
       ├── L1: Caffeine  In-JVM cache, ~2ms, private per instance
       ├── L2: Redis     Distributed cache, ~8ms, shared across instances
-      └── OpenSky API   External HTTP call, ~300–500ms, only on cache miss
+      └── OpenSky API   External HTTP call, ~300-500ms, only on cache miss
                         ↓
                    Haversine filter → sort by distance → return DTO
 ```
@@ -42,11 +42,11 @@ Load tested with K6 (50 concurrent users, 2-minute ramp):
 | Metric | Result | Target |
 |--------|--------|--------|
 | p95 latency | **7ms** | < 2000ms |
-| p99 latency | **10ms** | — |
-| Throughput | **70 req/s** | — |
+| p99 latency | **10ms** | |
+| Throughput | **70 req/s** | |
 | Error rate | **0.00%** | < 10% |
-| Cache hit latency | **2–8ms** | — |
-| OpenSky miss latency | **~500ms** | — |
+| Cache hit latency | **2-8ms** | |
+| OpenSky miss latency | **~500ms** | |
 
 Cache hit rate under sustained load approaches 100% within the 10s TTL window, effectively decoupling API throughput from OpenSky's rate limits.
 
@@ -60,7 +60,7 @@ Cache hit rate under sustained load approaches 100% within the 10s TTL window, e
 | Web | Spring MVC + WebClient | Sync REST layer, async HTTP client for OpenSky |
 | Cache L1 | Caffeine | Sub-millisecond in-JVM cache, zero network overhead |
 | Cache L2 | Redis (Lettuce) | Distributed, survives restarts, shared across instances |
-| Rate limiting | Redis INCR + EXPIRE | Atomic counter per IP per minute — no library needed |
+| Rate limiting | Redis INCR + EXPIRE | Atomic counter per IP per minute, no library needed |
 | Database | PostgreSQL + Flyway | Versioned schema migrations, historical snapshots |
 | Data source | OpenSky Network API | Free live aircraft transponder data (ADS-B) |
 | Load testing | K6 | Scriptable scenarios, p95/p99 metrics |
@@ -74,16 +74,16 @@ Cache hit rate under sustained load approaches 100% within the 10s TTL window, e
 OpenSky only accepts rectangular queries. We compute the smallest bounding box that contains the search circle, fetch from OpenSky, then apply the Haversine formula in Java to trim to the exact radius. Avoids PostGIS dependency — works on any standard Postgres instance (including Supabase free tier).
 
 **Redis INCR for rate limiting**
-Redis `INCR` is atomic — no race conditions under concurrent load. Storing `rate:{ip}:{minute}` as a plain integer with a 60s TTL means zero cleanup overhead and natural window resets. No third-party rate-limit library needed.
+Redis `INCR` is atomic, with no race conditions under concurrent load. Storing `rate:{ip}:{minute}` as a plain integer with a 60s TTL means zero cleanup overhead and natural window resets. No third-party rate-limit library needed.
 
 **Cache key rounding**
-Cache keys round lat/lng to 2 decimal places (~1.1km grid). `lat=1.3521` and `lat=1.3529` resolve to the same key — preventing cache misses from floating-point variance while keeping granularity meaningful for aircraft search.
+Cache keys round lat/lng to 2 decimal places (~1.1km grid). `lat=1.3521` and `lat=1.3529` resolve to the same key, preventing cache misses from floating-point variance while keeping granularity meaningful for aircraft search.
 
 **Fail-open on Redis unavailability**
-Both the cache layer and rate limiter catch Redis exceptions and continue rather than returning 500. Cache miss falls through to OpenSky. Redis down means the rate limiter skips rather than blocking all traffic.
+Both the cache layer and rate limiter catch Redis exceptions and continue rather than returning 500. Cache miss falls through to OpenSky. When Redis is down, the rate limiter skips rather than blocking all traffic.
 
 **No Lombok**
-Lombok's annotation processor is incompatible with Java 25 (accesses restricted internal compiler APIs). DTOs use Java Records (introduced in Java 16) — immutable, concise, and idiomatic. Entities use explicit constructors and getters, making the JPA contract explicit.
+Lombok's annotation processor is incompatible with Java 25 (accesses restricted internal compiler APIs). DTOs use Java Records (introduced in Java 16): immutable, concise, and idiomatic. Entities use explicit constructors and getters, making the JPA contract explicit.
 
 ---
 
