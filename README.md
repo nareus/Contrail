@@ -3,9 +3,13 @@
 A backend system inspired by FlightRadar24, built to explore what it takes to track hundreds of aircraft simultaneously in real time. Continuously ingests live ADS-B transponder data, maintains a live state store per aircraft, detects anomalous flight patterns, and pushes alerts to subscribers over WebSocket — all while serving low-latency on-demand radius searches.
 
 ```
-GET  /api/v1/aircraft?lat=1.35&lng=103.82&radius=150  →  94 live aircraft, p95: 7ms
+GET  /api/v1/aircraft?lat=1.35&lng=103.82&radius=150   →  94 live aircraft sorted by distance, p95: 7ms
+GET  /api/v1/aircraft/7c6b2b                           →  current position from Redis, sub-ms
+GET  /api/v1/aircraft/7c6b2b/trail?minutes=30          →  position trail from PostGIS
+GET  /api/v1/aircraft/congestion?lat=1.35&lng=103.82&radius=200  →  94 aircraft now, 78 last hour
+GET  /api/v1/alerts?type=GO_AROUND                     →  filtered anomaly history
+GET  /api/v1/stats                                     →  847 tracked, 12 alerts/hr
 WS   /topic/alerts                                     →  HOLDING_PATTERN detected: SIA221 over Changi
-GET  /api/v1/alerts                                    →  last 100 anomaly events
 ```
 
 ---
@@ -127,6 +131,8 @@ To scale the ingestion pipeline itself, the natural next step is replacing the `
 
 ### Search aircraft by radius
 
+### 1. Search aircraft by radius
+
 ```
 GET /api/v1/aircraft?lat={lat}&lng={lng}&radius={km}
 ```
@@ -156,14 +162,123 @@ GET /api/v1/aircraft?lat={lat}&lng={lng}&radius={km}
 
 Response headers: `X-Total-Count`, `X-Rate-Limit-Remaining`, `Retry-After` (on 429)
 
-### Recent anomaly alerts
+---
+
+### 2. Get current state of one aircraft
+
+Reads directly from the Redis live state store — sub-millisecond response, no database hit.
 
 ```
-GET /api/v1/alerts           last 100 alerts across all aircraft
-GET /api/v1/alerts/{icao24}  alerts for a specific aircraft
+GET /api/v1/aircraft/{icao24}
 ```
 
-### WebSocket — live alert stream
+```json
+{
+  "icao24": "7c6b2b",
+  "callsign": "QFA431",
+  "latitude": 1.359,
+  "longitude": 103.989,
+  "altitudeMeters": 3048.0,
+  "heading": 142.0,
+  "velocityMs": 241.3,
+  "verticalRate": -4.2,
+  "onGround": false,
+  "lastSeenMs": 1710494400000
+}
+```
+
+Returns `404` if the aircraft has not been seen in the last 5 minutes.
+
+---
+
+### 3. Flight trail (position history)
+
+Returns every recorded position for an aircraft over the last N minutes, queried from PostgreSQL using the PostGIS spatial index. Useful for replaying a flight path.
+
+```
+GET /api/v1/aircraft/{icao24}/trail?minutes=30
+```
+
+| Parameter | Type | Default | Constraints |
+|-----------|------|---------|-------------|
+| `minutes` | int | 30 | 1 to 1440 |
+
+```json
+[
+  { "latitude": 1.28, "longitude": 103.86, "altitudeMeters": 152.0, "heading": 138.0, "velocityMs": 78.2, "capturedAt": "2026-03-15T10:00:00Z" },
+  { "latitude": 1.31, "longitude": 103.90, "altitudeMeters": 610.0, "heading": 140.0, "velocityMs": 142.6, "capturedAt": "2026-03-15T10:00:10Z" }
+]
+```
+
+Response header: `X-Point-Count`
+
+---
+
+### 4. Airspace congestion
+
+Counts distinct aircraft seen within a radius in the last 5 minutes and the last hour. Uses `ST_DWithin` against the PostGIS-indexed `position_history` table.
+
+```
+GET /api/v1/aircraft/congestion?lat={lat}&lng={lng}&radius={km}
+```
+
+```json
+{
+  "latitude": 1.35,
+  "longitude": 103.82,
+  "radiusKm": 200.0,
+  "aircraftNow": 94,
+  "aircraftLastHour": 78
+}
+```
+
+---
+
+### 5. Anomaly alerts
+
+```
+GET /api/v1/alerts                                          last 100 alerts
+GET /api/v1/alerts?type=GO_AROUND                          filter by type
+GET /api/v1/alerts?since=2026-03-15T00:00:00Z              filter by time
+GET /api/v1/alerts?type=HOLDING_PATTERN&since=2026-03-15T00:00:00Z
+GET /api/v1/alerts/{icao24}                                alerts for one aircraft
+```
+
+Alert types: `HOLDING_PATTERN`, `GO_AROUND`, `DIVERSION`
+
+```json
+{
+  "id": 42,
+  "icao24": "7c6b2b",
+  "callsign": "QFA431",
+  "alertType": "GO_AROUND",
+  "latitude": 1.359,
+  "longitude": 103.989,
+  "altitudeMeters": 487.0,
+  "description": "Go-around detected: was descending to 312m, now climbing at 4.2 m/s",
+  "detectedAt": "2026-03-15T10:30:00Z"
+}
+```
+
+---
+
+### 6. Live system stats
+
+```
+GET /api/v1/stats
+```
+
+```json
+{
+  "trackedAircraftLast5min": 847,
+  "alertsLastHour": 12,
+  "totalAlerts": 156
+}
+```
+
+---
+
+### 7. WebSocket — live alert stream
 
 ```
 Connect:    ws://localhost:8080/ws  (SockJS + STOMP)
@@ -184,8 +299,6 @@ Subscribe:  /topic/alerts           all alerts
 }
 ```
 
-Alert types: `HOLDING_PATTERN`, `GO_AROUND`, `DIVERSION`
-
 ---
 
 ## Running Locally
@@ -204,8 +317,21 @@ mvn spring-boot:run
 # Search aircraft over Singapore
 curl "http://localhost:8080/api/v1/aircraft?lat=1.35&lng=103.82&radius=150"
 
-# View detected anomalies
+# Current state of one aircraft (replace with a real ICAO24 from the search above)
+curl "http://localhost:8080/api/v1/aircraft/7c6b2b"
+
+# Position trail for the last 30 minutes
+curl "http://localhost:8080/api/v1/aircraft/7c6b2b/trail?minutes=30"
+
+# Airspace congestion over Singapore
+curl "http://localhost:8080/api/v1/aircraft/congestion?lat=1.35&lng=103.82&radius=200"
+
+# Recent alerts (filter by type or time)
 curl "http://localhost:8080/api/v1/alerts"
+curl "http://localhost:8080/api/v1/alerts?type=GO_AROUND"
+
+# System stats
+curl "http://localhost:8080/api/v1/stats"
 
 # Health check (DB + Redis status)
 curl "http://localhost:8080/actuator/health"
@@ -232,8 +358,8 @@ src/main/java/com/aircraftapi/
 │   ├── CacheConfig.java                Caffeine (L1) + RedisTemplate (L2) beans
 │   └── WebSocketConfig.java            STOMP endpoint, /topic broker
 ├── controller/
-│   ├── AircraftController.java         GET /api/v1/aircraft
-│   └── AlertController.java            GET /api/v1/alerts
+│   ├── AircraftController.java         GET /api/v1/aircraft, /{icao24}, /{icao24}/trail, /congestion
+│   └── AlertController.java            GET /api/v1/alerts, /stats
 ├── detector/
 │   ├── PatternDetector.java            Interface: detect(current, history)
 │   ├── HoldingPatternDetector.java     Circular flight path detection
@@ -242,9 +368,13 @@ src/main/java/com/aircraftapi/
 ├── domain/
 │   └── FlightAlert.java                JPA entity → flight_alerts table
 ├── dto/
-│   ├── AircraftResponse.java           On-demand search response
+│   ├── AircraftResponse.java           On-demand radius search response
+│   ├── AircraftStateResponse.java      Single aircraft live state (from Redis)
 │   ├── AlertMessage.java               WebSocket push payload
-│   └── PositionUpdate.java             Internal position event (includes verticalRate)
+│   ├── CongestionResponse.java         Airspace congestion counts
+│   ├── PositionUpdate.java             Internal position event (includes verticalRate)
+│   ├── StatsResponse.java              System-wide stats
+│   └── TrailPointResponse.java         One point in a flight trail
 ├── exception/
 │   └── GlobalExceptionHandler.java     @RestControllerAdvice, consistent error JSON
 ├── filter/
@@ -255,7 +385,8 @@ src/main/java/com/aircraftapi/
     ├── AircraftService.java            On-demand: Caffeine → Redis → OpenSky
     ├── AlertBroadcaster.java           STOMP push to /topic/alerts
     ├── IngestionService.java           @Scheduled poller, pattern detection pipeline
-    └── LiveStateStore.java             Redis HASH (state) + LIST (history) per aircraft
+    ├── LiveStateStore.java             Redis HASH (state) + LIST (history) per aircraft
+    └── StatsService.java               Trail, stats, and congestion queries (PostGIS)
 
 src/main/resources/
 ├── application.yml
@@ -272,8 +403,7 @@ k6/
 
 ## What's Next
 
-- [ ] Flight trail replay: `GET /api/v1/aircraft/{icao24}/trail?minutes=30` — query PostGIS position history
-- [ ] Live stats: `GET /api/v1/stats` — tracked aircraft count, alerts per hour, regions monitored
 - [ ] Replace `@Scheduled` poller with Kafka consumer — enables multi-receiver ingestion at scale
-- [ ] Airspace congestion: `GET /api/v1/congestion` — grid cell density from position history
 - [ ] Deploy to Railway with Supabase (PostGIS) + Upstash (Redis)
+- [ ] Authentication — API key per client, usage tracked in Postgres
+- [ ] Congestion heatmap — grid the region into cells, count aircraft per cell, return as GeoJSON

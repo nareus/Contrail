@@ -1,5 +1,6 @@
 package com.aircraftapi.service;
 
+import com.aircraftapi.dto.AircraftStateResponse;
 import com.aircraftapi.dto.PositionUpdate;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
@@ -14,6 +15,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 @Service
@@ -47,6 +49,36 @@ public class LiveStateStore {
         );
         redis.opsForHash().putAll(key, fields);
         redis.expire(key, Duration.ofMinutes(5));
+    }
+
+    public Optional<AircraftStateResponse> getState(String icao24) {
+        String key = "aircraft:state:" + icao24;
+        Map<Object, Object> fields = redis.opsForHash().entries(key);
+        if (fields.isEmpty()) return Optional.empty();
+
+        return Optional.of(new AircraftStateResponse(
+                icao24,
+                str(fields, "callsign"),
+                dbl(fields, "lat"),
+                dbl(fields, "lon"),
+                dbl(fields, "alt"),
+                dbl(fields, "heading"),
+                dbl(fields, "velocity"),
+                dbl(fields, "verticalRate"),
+                "true".equals(fields.get("onGround")),
+                fields.containsKey("lastSeen") ? Long.parseLong((String) fields.get("lastSeen")) : 0L
+        ));
+    }
+
+    private String str(Map<Object, Object> fields, String key) {
+        Object v = fields.get(key);
+        return v == null || ((String) v).isBlank() ? null : (String) v;
+    }
+
+    private Double dbl(Map<Object, Object> fields, String key) {
+        Object v = fields.get(key);
+        if (v == null || ((String) v).isBlank()) return null;
+        try { return Double.parseDouble((String) v); } catch (NumberFormatException e) { return null; }
     }
 
     public void appendToHistory(PositionUpdate update) {
