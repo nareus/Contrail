@@ -61,3 +61,12 @@ rate-limit:
   capacity: 100
   refill-tokens: 100
   refill-period-seconds: 60
+
+ingestion:
+  poll-interval-ms: 10000
+  position-buffer-size: 30
+  region:
+    min-lat: -10.0
+    max-lat: 35.0
+    min-lon: 90.0
+    max-lon: 145.0
