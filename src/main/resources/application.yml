@@ -3,9 +3,9 @@ spring:
     name: aircraft-tracker-api
 
   datasource:
-    url: jdbc:postgresql://localhost:5432/aircraftdb
-    username: aircraft
-    password: aircraft_pass
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/aircraftdb}
+    username: ${DATABASE_USERNAME:aircraft}
+    password: ${DATABASE_PASSWORD:aircraft_pass}
     driver-class-name: org.postgresql.Driver
     hikari:
       maximum-pool-size: 10
@@ -28,8 +28,7 @@ spring:
 
   data:
     redis:
-      host: localhost
-      port: 6379
+      url: ${REDIS_URL:redis://localhost:6379}
       timeout: 2000ms
       lettuce:
         pool:
@@ -46,7 +45,7 @@ opensky:
   cache-ttl-seconds: 10
 
 server:
-  port: 8080
+  port: ${PORT:8080}
 
 management:
   endpoints:
