@@ -1,6 +1,6 @@
 spring:
   application:
-    name: aircraft-tracker-api
+    name: contrail
 
   datasource:
     url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/aircraftdb}
@@ -68,7 +68,7 @@ ingestion:
   poll-interval-ms: 30000
   position-buffer-size: 30
   region:
-    min-lat: -10.0
-    max-lat: 35.0
-    min-lon: 90.0
-    max-lon: 145.0
+    min-lat: 25.0
+    max-lat: 50.0
+    min-lon: -125.0
+    max-lon: -65.0
