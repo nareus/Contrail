@@ -1,6 +1,6 @@
 # Contrail - Real-Time Flight Tracking Engine
 
-A backend system inspired by FlightRadar24, built to explore what it takes to track thousands of aircraft simultaneously in real time. Continuously ingests live ADS-B transponder data, maintains a live state store per aircraft, detects anomalous flight patterns, and pushes alerts to subscribers over WebSocket, all while serving low-latency on-demand radius searches.
+A backend system inspired by FlightRadar24, built as a learning project to explore what it takes to track thousands of aircraft simultaneously in real time. Continuously ingests live ADS-B transponder data, maintains a live state store per aircraft, detects anomalous flight patterns, and pushes alerts to subscribers over WebSocket, all while serving low-latency on-demand radius searches. The scalability patterns (two-layer cache, distributed rate limiting, stateless detectors) are designed to demonstrate production-grade architecture, not to handle production-scale traffic.
 
 ```
 GET  /api/v1/aircraft?lat=40.6&lng=-73.8&radius=200    ->  live aircraft sorted by distance, p95: 7ms
