@@ -41,6 +41,9 @@ spring:
 
 opensky:
   base-url: https://opensky-network.org/api
+  token-url: https://auth.opensky-network.org/auth/realms/opensky-network/protocol/openid-connect/token
+  client-id: ${OPENSKY_CLIENT_ID:}
+  client-secret: ${OPENSKY_CLIENT_SECRET:}
   timeout-seconds: 10
   cache-ttl-seconds: 10
 
@@ -57,12 +60,12 @@ management:
       show-details: always
 
 rate-limit:
-  capacity: 100
-  refill-tokens: 100
+  capacity: 20
+  refill-tokens: 20
   refill-period-seconds: 60
 
 ingestion:
-  poll-interval-ms: 10000
+  poll-interval-ms: 30000
   position-buffer-size: 30
   region:
     min-lat: -10.0
