@@ -44,15 +44,26 @@ public class RateLimitFilter implements Filter {
         String clientIp = extractClientIp(httpRequest);
         String key      = buildRateLimitKey(clientIp);
 
-        Long count = stringRedisTemplate.opsForValue().increment(key);
+        Long count;
+        try {
+            count = stringRedisTemplate.opsForValue().increment(key);
+        } catch (Exception e) {
+            log.warn("Redis unavailable for rate limiting, allowing request: {}", e.getMessage());
+            chain.doFilter(request, response);
+            return;
+        }
 
         if (count == null) {
             chain.doFilter(request, response);
             return;
         }
 
-        if (count == 1) {
-            stringRedisTemplate.expire(key, Duration.ofSeconds(60));
+        try {
+            if (count == 1) {
+                stringRedisTemplate.expire(key, Duration.ofSeconds(60));
+            }
+        } catch (Exception e) {
+            log.warn("Redis expire failed: {}", e.getMessage());
         }
 
         httpResponse.addHeader("X-Rate-Limit-Remaining",

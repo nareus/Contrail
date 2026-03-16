@@ -47,13 +47,23 @@ public class LiveStateStore {
                 "callsign",     update.callsign() != null ? update.callsign() : "",
                 "lastSeen",     String.valueOf(System.currentTimeMillis())
         );
-        redis.opsForHash().putAll(key, fields);
-        redis.expire(key, Duration.ofMinutes(5));
+        try {
+            redis.opsForHash().putAll(key, fields);
+            redis.expire(key, Duration.ofMinutes(5));
+        } catch (Exception e) {
+            log.warn("Redis unavailable for state update {}: {}", update.icao24(), e.getMessage());
+        }
     }
 
     public Optional<AircraftStateResponse> getState(String icao24) {
         String key = "aircraft:state:" + icao24;
-        Map<Object, Object> fields = redis.opsForHash().entries(key);
+        Map<Object, Object> fields;
+        try {
+            fields = redis.opsForHash().entries(key);
+        } catch (Exception e) {
+            log.warn("Redis unavailable for state read {}: {}", icao24, e.getMessage());
+            return Optional.empty();
+        }
         if (fields.isEmpty()) return Optional.empty();
 
         return Optional.of(new AircraftStateResponse(
@@ -88,14 +98,20 @@ public class LiveStateStore {
             redis.opsForList().leftPush(key, json);
             redis.opsForList().trim(key, 0, bufferSize - 1);
             redis.expire(key, Duration.ofMinutes(10));
-        } catch (JsonProcessingException e) {
-            log.warn("Failed to serialize position update for {}: {}", update.icao24(), e.getMessage());
+        } catch (Exception e) {
+            log.warn("Failed to append history for {}: {}", update.icao24(), e.getMessage());
         }
     }
 
     public List<PositionUpdate> getHistory(String icao24) {
         String key = "aircraft:history:" + icao24;
-        List<String> raw = redis.opsForList().range(key, 0, -1);
+        List<String> raw;
+        try {
+            raw = redis.opsForList().range(key, 0, -1);
+        } catch (Exception e) {
+            log.warn("Redis unavailable for history read {}: {}", icao24, e.getMessage());
+            return Collections.emptyList();
+        }
         if (raw == null) return Collections.emptyList();
         return raw.stream()
                 .map(json -> {

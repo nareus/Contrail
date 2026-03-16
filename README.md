@@ -95,23 +95,12 @@ Cache hit rate under sustained load approaches 100% within the 10s TTL window, d
 
 ## Key Engineering Decisions
 
-**Two-layer cache with different eviction strategies**
-Caffeine (L1) is private to each JVM instance - no network, no serialization, ~2ms. Redis (L2) is shared across all instances - survives restarts, consistent under horizontal scale, ~8ms. Without L1, every cache hit would still pay a network round-trip to Redis. Without L2, a second app instance would have a cold cache and hammer OpenSky. The two layers together mean warm reads are always local and cold reads are shared, which is critical when OpenSky caps authenticated users at 4,000 requests/day.
-
-**Redis as the live state store, not a cache**
-The ingestion service writes each aircraft's latest position to a Redis HASH (TTL 5 min) and appends to a position buffer LIST (last 30 positions). This separates live state from query caching - the state store is the source of truth for what's flying right now, while the query cache serves repeated radius searches. This mirrors how production systems like FlightRadar24 maintain aircraft state: a fast read layer that's continuously written to, separate from their serving layer.
-
-**Pattern detection as a stateless rule engine**
-Each detector receives the current position and history buffer and returns an `Optional<AlertMessage>` - no shared mutable state, no database reads in the hot path. Cooldowns are tracked in a per-instance `ConcurrentHashMap`. This means detectors can be added, removed, or tuned without touching the ingestion pipeline, and tested in complete isolation.
-
-**Bounding box query into Haversine filter in Java**
-OpenSky's API only accepts rectangular bounding boxes. The service computes the smallest enclosing box for a circle query, fetches from OpenSky, then applies the Haversine formula in Java to trim to the exact radius. This avoids needing PostGIS for the serving path (PostGIS is used for the position trail) and means the on-demand endpoint works on any standard Postgres instance.
-
-**Fail-open on infrastructure unavailability**
-Both the cache layer and rate limiter treat Redis failures as non-fatal. Cache miss falls through to OpenSky. Rate limiter lets the request through rather than blocking all traffic because Redis is down. This is a deliberate trade-off: a degraded but available service is better than a hard dependency on every infrastructure component being healthy.
-
-**Redis INCR for distributed rate limiting**
-`INCR` is atomic in Redis - no locks, no race conditions under concurrent load. The key includes the current minute epoch (`rate:{ip}:{minute}`), so the window resets automatically and expired keys are cleaned up by Redis TTL. No third-party rate-limit library, no distributed coordination overhead.
+- **Two-layer cache** - Caffeine (L1, ~2ms, in-JVM) + Redis (L2, ~8ms, shared) so warm reads are always local and cold reads don't hammer OpenSky
+- **Redis as live state store, not a cache** - HASH per aircraft for current position, LIST for position buffer, separate from the query cache layer
+- **Stateless pattern detectors** - each receives position + history, returns `Optional<AlertMessage>`, no shared state, testable in isolation
+- **Bounding box + Haversine** - OpenSky returns a rectangle, Java trims to exact radius via Haversine, avoids PostGIS on the serving path
+- **Fail-open everywhere** - every Redis consumer catches failures and degrades gracefully: no rate limiting, no cache, no state, but never a 500
+- **Redis INCR for rate limiting** - atomic counter per IP per minute, no locks, no library, TTL handles cleanup
 
 ---
 
@@ -342,58 +331,4 @@ brew install k6
 k6 run k6/load-test.js
 ```
 
----
-
-## Project Structure
-
-```
-src/main/java/com/aircraftapi/
-+-- AircraftApiApplication.java
-+-- client/
-|   +-- OpenSkyClient.java              WebClient + OAuth2, fetches ADS-B positions
-|   +-- OpenSkyResponse.java            Raw OpenSky API response model
-+-- config/
-|   +-- CacheConfig.java                Caffeine (L1) + RedisTemplate (L2) beans
-|   +-- WebSocketConfig.java            STOMP endpoint, /topic broker
-+-- controller/
-|   +-- AircraftController.java         GET /api/v1/aircraft, /{icao24}, /{icao24}/trail, /congestion
-|   +-- AlertController.java            GET /api/v1/alerts, /stats
-+-- detector/
-|   +-- PatternDetector.java            Interface: detect(current, history)
-|   +-- HoldingPatternDetector.java     Circular flight path detection
-|   +-- GoAroundDetector.java           Aborted landing detection
-|   +-- DiversionDetector.java          Sustained heading change detection
-+-- domain/
-|   +-- FlightAlert.java                JPA entity, flight_alerts table
-+-- dto/
-|   +-- AircraftResponse.java           On-demand radius search response
-|   +-- AircraftStateResponse.java      Single aircraft live state (from Redis)
-|   +-- AlertMessage.java               WebSocket push payload
-|   +-- CongestionResponse.java         Airspace congestion counts
-|   +-- PositionUpdate.java             Internal position event (includes verticalRate)
-|   +-- StatsResponse.java              System-wide stats
-|   +-- TrailPointResponse.java         One point in a flight trail
-+-- exception/
-|   +-- GlobalExceptionHandler.java     @RestControllerAdvice, consistent error JSON
-+-- filter/
-|   +-- RateLimitFilter.java            Redis INCR rate limiting, 20 req/min per IP
-+-- repository/
-|   +-- FlightAlertRepository.java      Spring Data JPA
-+-- service/
-    +-- AircraftService.java            On-demand: Caffeine -> Redis -> OpenSky
-    +-- AlertBroadcaster.java           STOMP push to /topic/alerts
-    +-- IngestionService.java           @Scheduled poller, pattern detection pipeline
-    +-- LiveStateStore.java             Redis HASH (state) + LIST (history) per aircraft
-    +-- StatsService.java               Trail, stats, and congestion queries (PostGIS)
-
-src/main/resources/
-+-- application.yml
-+-- db/migration/
-    +-- V1__create_aircraft_snapshots.sql
-    +-- V2__add_position_history_and_alerts.sql
-    +-- V3__drop_aircraft_snapshots.sql
-
-k6/
-+-- load-test.js                        Smoke + ramp-up scenarios, custom metrics
-```
 
